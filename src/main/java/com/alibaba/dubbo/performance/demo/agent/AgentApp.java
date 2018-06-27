@@ -25,7 +25,9 @@ import com.generallycloud.baseio.component.ChannelAcceptor;
 import com.generallycloud.baseio.component.ChannelAliveIdleEventListener;
 import com.generallycloud.baseio.component.ChannelContext;
 import com.generallycloud.baseio.component.ChannelEventListenerAdapter;
-import com.generallycloud.baseio.component.IoEventHandleAdaptor;
+import com.generallycloud.baseio.component.FastThreadLocal;
+import com.generallycloud.baseio.component.FastThreadLocalThread;
+import com.generallycloud.baseio.component.IoEventHandle;
 import com.generallycloud.baseio.component.LoggerChannelOpenListener;
 import com.generallycloud.baseio.component.NioEventLoop;
 import com.generallycloud.baseio.component.NioEventLoopGroup;
@@ -34,8 +36,6 @@ import com.generallycloud.baseio.component.NioSocketChannel;
 import com.generallycloud.baseio.component.ReConnector;
 import com.generallycloud.baseio.concurrent.EventLoop;
 import com.generallycloud.baseio.concurrent.EventLoopListener;
-import com.generallycloud.baseio.configuration.Configuration;
-import com.generallycloud.baseio.log.Logger;
 import com.generallycloud.baseio.log.LoggerFactory;
 import com.generallycloud.baseio.protocol.Future;
 
@@ -46,7 +46,7 @@ public class AgentApp {
     // 添加日志保存目录: -Dlogs.dir=/path/to/your/logs/dir。请安装自己的环境来设置日志目录。
 
     public static final int                                CORE_SIZE;
-    public static final boolean                            BATCH_FLUSH            = false;
+    public static final boolean                            BATCH_FLUSH            = true;
     public static final int                                WRITE_BUFFER           = 16;
     public static final boolean                            ENABLE_MEM_POOL        = true;
     public static final boolean                            ENABLE_MEM_POOL_DIRECT = true;
@@ -66,7 +66,7 @@ public class AgentApp {
 //            .getLogger(AgentApp.class);
     private static EtcdRegistry                            registry;
     private static NioSocketChannel                        providerClient         = null;
-    private static final int                               CAReqBufVarIndex       = NioEventLoop
+    private static final int                               CAReqBufVarIndex       = FastThreadLocal
             .nextIndexedVariablesIndex();
 
     static {
@@ -89,15 +89,14 @@ public class AgentApp {
 
                 @Override
                 public void onStop(EventLoop eventLoop) {
-                    NioEventLoop e = (NioEventLoop) eventLoop;
-                    ByteBuffer buffer = (ByteBuffer) e.getIndexedVariable(CAReqBufVarIndex);
+                    ByteBuffer buffer = (ByteBuffer) FastThreadLocal.get().getIndexedVariable(CAReqBufVarIndex);
                     ByteBufUtil.release(buffer);
                 }
 
                 @Override
                 public void onStartup(EventLoop eventLoop) {
-                    NioEventLoop e = (NioEventLoop) eventLoop;
-                    e.setIndexedVariable(CAReqBufVarIndex, ByteBuffer.allocateDirect(1024 * 4));
+                    FastThreadLocalThread l = (FastThreadLocalThread) eventLoop.getMonitor();
+                    l.getThreadLocal().setIndexedVariable(CAReqBufVarIndex, ByteBuffer.allocateDirect(1024 * 4));
                 }
             });
         } else if ("provider".equals(type)) {
@@ -143,7 +142,6 @@ public class AgentApp {
 
     private static void initConsumerAgent() throws IOException {
         NioEventLoopGroup group = consumerAgentGroup;
-        Configuration cfg = new Configuration(SERVER_PORT);
         group.setEnableMemoryPool(ENABLE_MEM_POOL);
         group.setEnableMemoryPoolDirect(ENABLE_MEM_POOL_DIRECT);
         group.setMemoryPoolRate(16);
@@ -151,9 +149,9 @@ public class AgentApp {
         group.setEventLoopSize(THREADS);
         group.setWriteBuffers(WRITE_BUFFER);
         group.setSharable(true);
-        ChannelContext context = new ChannelContext(cfg);
+        ChannelContext context = new ChannelContext(SERVER_PORT);
         ChannelAcceptor acceptor = new ChannelAcceptor(context, group);
-        context.setIoEventHandle(new IoEventHandleAdaptor() {
+        context.setIoEventHandle(new IoEventHandle() {
 
             @Override
             public final void accept(NioSocketChannel channel, Future future) throws Exception {
@@ -176,13 +174,14 @@ public class AgentApp {
                 //                    channel.flush(f);
                 //                    return;
                 //                }
+                FastThreadLocal l = FastThreadLocal.get();
                 endpoint.registHttpClient(channelId);
-                ByteBuffer CAReqBuf = (ByteBuffer) eventLoop.getIndexedVariable(CAReqBufVarIndex);
+                ByteBuffer CAReqBuf = (ByteBuffer) l.getIndexedVariable(CAReqBufVarIndex);
                 CAReqBuf.clear();
                 byte[] interfaceNameBytes = getStaticParamBytes(interfaceName);
                 byte[] methodBytes = getStaticParamBytes(method);
                 byte[] parameterTypesStringBytes = getStaticParamBytes(parameterTypesString);
-                CharsetEncoder encoder = eventLoop.getCharsetEncoder(Encoding.UTF8);
+                CharsetEncoder encoder = l.getCharsetEncoder(Encoding.UTF8);
                 encoder.reset();
                 encoder.encode(CharBuffer.wrap(parameter), CAReqBuf, true);
                 CAReqBuf.flip();
@@ -202,8 +201,7 @@ public class AgentApp {
                 buf.put(methodBytes);
                 buf.put(parameterTypesStringBytes);
                 buf.read(CAReqBuf);
-                f.setByteBuf(buf.flip());
-                endpoint.flushChannelFuture(channelId, f);
+                endpoint.flushChannelFuture(channelId, buf.flip());
             }
         });
         context.addChannelEventListener(new ChannelEventListenerAdapter() {
@@ -225,13 +223,12 @@ public class AgentApp {
 
     private static void initProviderAgent() throws Exception {
         NioEventLoopGroup group = new NioEventLoopGroup(1);
-        Configuration cfg = new Configuration(SERVER_PORT);
         group.setEnableMemoryPool(ENABLE_MEM_POOL);
         group.setEnableMemoryPoolDirect(ENABLE_MEM_POOL_DIRECT);
         group.setMemoryPoolRate(16);
         group.setWriteBuffers(WRITE_BUFFER);
         group.setSharable(true);
-        ChannelContext context = new ChannelContext(cfg);
+        ChannelContext context = new ChannelContext(SERVER_PORT);
         ChannelAcceptor acceptor = new ChannelAcceptor(context, group);
         context.addChannelEventListener(new LoggerChannelOpenListener());
         context.addChannelEventListener(new SetTCP_NODELAYSEListener());
@@ -245,54 +242,51 @@ public class AgentApp {
             }
         });
         final DubboFuture df = new DubboFuture();
-        context.setIoEventHandle(new IoEventHandleAdaptor() {
+        context.setIoEventHandle(new IoEventHandle() {
             
             private boolean needAddTask = true;
             
-            private final List<Future> futures = new ArrayList<>(200);
+            private final List<ByteBuf> futures = new ArrayList<>(200);
             
             @Override
             public final void accept(NioSocketChannel channel, Future future) throws Exception {
                 AgentFuture f = (AgentFuture) future;
                 df.setData(f.getData());
-                providerClient.getProtocolCodec().encode(channel, df);
-                f.setByteBuf(df.getByteBuf());
                 if (BATCH_FLUSH) {
-                    futures.add(future);
+                    futures.add(providerClient.encode(df));
                     if (needAddTask) {
                         needAddTask = false;
                         providerClient.getEventLoop().dispatchAfterLoop(new NioEventLoopTask() {
                             
                             @Override
                             public void fireEvent(NioEventLoop eventLoop) throws IOException {
-                                providerClient.flushFutures(futures);
+                                providerClient.flush(futures);
                                 futures.clear();
                                 needAddTask = true;
                             }
                         });
                     }
                 }else{
-                    providerClient.flushFuture(f);
+                    providerClient.flush(providerClient.encode(df));
                 }
             }
         });
         context.setProtocolCodec(new AgentCodec());
         acceptor.bind();
         registry = new EtcdRegistry(System.getProperty("etcd.url"));
-        Configuration dcfg;
+        ChannelContext dcontext;
         if (RUN_MODE_LOCAL) {
-            dcfg = new Configuration(DUBBO_PROTOCOL_PORT);
+            dcontext = new ChannelContext(DUBBO_PROTOCOL_PORT);
         } else {
-            dcfg = new Configuration(SERVER_HOST, DUBBO_PROTOCOL_PORT);
+            dcontext = new ChannelContext(SERVER_HOST, DUBBO_PROTOCOL_PORT);
         }
-        ChannelContext dcontext = new ChannelContext(dcfg);
         ReConnector providerConnector = new ReConnector(dcontext, group);
-        dcontext.setIoEventHandle(new IoEventHandleAdaptor() {
+        dcontext.setIoEventHandle(new IoEventHandle() {
             @Override
             public final void accept(NioSocketChannel channel, Future future) throws Exception {
                 DubboFuture df = (DubboFuture) future;
                 ByteBuf hashbs = df.getData();
-                hashbs.skipBytes(NEW_LINE_LEN + 1);
+                hashbs.skip(NEW_LINE_LEN + 1);
                 hashbs.limit(hashbs.limit() - NEW_LINE_LEN);
                 int id = (int) df.getId();
                 int len = 4 + hashbs.remaining();
@@ -306,25 +300,24 @@ public class AgentApp {
                 buf.putInt(id);
                 buf.read(hashbs);
                 hashbs.release(hashbs.getReleaseVersion());
-                df.setByteBuf(buf.flip());
                 if (BATCH_FLUSH) {
                     final BatchFlushTask task = (BatchFlushTask) agentClient
                             .getAttribute("BatchFlushTask");
-                    task.futures.add(df);
+                    task.futures.add(buf.flip());
                     if (task.needAddTask) {
                         task.needAddTask = false;
                         agentClient.getEventLoop().dispatchAfterLoop(new NioEventLoopTask() {
 
                             @Override
                             public void fireEvent(NioEventLoop eventLoop) throws IOException {
-                                agentClient.flushFutures(task.futures);
+                                agentClient.flush(task.futures);
                                 task.futures.clear();
                                 task.needAddTask = true;
                             }
                         });
                     }
                 } else {
-                    agentClient.flushFuture(df);
+                    agentClient.flush(buf.flip());
                 }
             }
         });
@@ -367,7 +360,7 @@ public class AgentApp {
 
     public static class BatchFlushTask {
         boolean      needAddTask = true;
-        List<Future> futures     = new ArrayList<>(200);
+        List<ByteBuf> futures     = new ArrayList<>(200);
     }
 
     public static class CopyOnWriteArrayList {

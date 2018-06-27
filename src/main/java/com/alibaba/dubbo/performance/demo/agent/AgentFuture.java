@@ -46,7 +46,7 @@ public final class AgentFuture extends AbstractFuture {
                     src.position(src.position() - 4);
                     return false;
                 }
-                setSilent(true);
+                setSilent();
                 int channelId = src.getInt();
                 AgentApp.agentClientMap.put(channelId, channel);
             }else if(len == -4){
@@ -54,7 +54,7 @@ public final class AgentFuture extends AbstractFuture {
                     src.position(src.position() - 4);
                     return false;
                 }
-                setSilent(true);
+                setSilent();
                 int channelId = src.getInt();
                 AgentApp.agentClientMap.remove(channelId);
             }else{
@@ -74,9 +74,9 @@ public final class AgentFuture extends AbstractFuture {
 
     private void setHeartBeat(int len) {
         if (len == AgentCodec.PROTOCOL_PING) {
-            setPING();
+            setPing();
         } else if (len == AgentCodec.PROTOCOL_PONG) {
-            setPONG();
+            setPong();
         } else {
             throw new ProtocolException("illegal length:" + len);
         }

@@ -112,7 +112,7 @@ public final class DubboFuture extends AbstractFuture {
                 return false;
             }
             isHeaderComplate = true;
-            src.skipBytes(2);
+            src.skip(2);
             byte byte2 = src.getByte();
             this.isRequest = (byte2 & 0b10000000) != 0;
             this.twoWay = (byte2 & 0b01000000) != 0;
@@ -133,20 +133,20 @@ public final class DubboFuture extends AbstractFuture {
         data.flip();
         return true;
     }
-
+    
     @Override
-    public boolean isHeartbeat() {
+    public boolean isSilent() {
         return isEvent();
     }
 
     @Override
-    public boolean isPING() {
-        return isHeartbeat() && isRequest();
+    public boolean isPing() {
+        return isEvent() && isRequest();
     }
 
     @Override
-    public boolean isPONG() {
-        return isHeartbeat() && !isRequest();
+    public boolean isPong() {
+        return isEvent() && !isRequest();
     }
 
 }

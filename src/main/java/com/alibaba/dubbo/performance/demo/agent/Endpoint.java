@@ -15,15 +15,12 @@ import com.generallycloud.baseio.common.CloseUtil;
 import com.generallycloud.baseio.component.ChannelActiveIdleEventListener;
 import com.generallycloud.baseio.component.ChannelContext;
 import com.generallycloud.baseio.component.ChannelEventListenerAdapter;
-import com.generallycloud.baseio.component.IoEventHandleAdaptor;
+import com.generallycloud.baseio.component.IoEventHandle;
 import com.generallycloud.baseio.component.LoggerChannelOpenListener;
 import com.generallycloud.baseio.component.NioEventLoop;
 import com.generallycloud.baseio.component.NioEventLoopTask;
 import com.generallycloud.baseio.component.NioSocketChannel;
 import com.generallycloud.baseio.component.ReConnector;
-import com.generallycloud.baseio.configuration.Configuration;
-import com.generallycloud.baseio.log.Logger;
-import com.generallycloud.baseio.log.LoggerFactory;
 import com.generallycloud.baseio.protocol.Future;
 
 public final class Endpoint implements Closeable, Comparable<Endpoint> {
@@ -114,11 +111,10 @@ public final class Endpoint implements Closeable, Comparable<Endpoint> {
     }
 
     public void connect(final NioEventLoop eventLoop) {
-        Configuration cfg = new Configuration(host, port);
-        ChannelContext context = new ChannelContext(cfg);
+        ChannelContext context = new ChannelContext(host, port);
         connector = new ReConnector(context, eventLoop);
         connector.setRetryTime(1000);
-        context.setIoEventHandle(new IoEventHandleAdaptor() {
+        context.setIoEventHandle(new IoEventHandle() {
 
             @Override
             public final void accept(NioSocketChannel agentChannel, Future future)
@@ -163,8 +159,7 @@ public final class Endpoint implements Closeable, Comparable<Endpoint> {
                     buf.read(res);
                     res.release(res.getReleaseVersion());
                 }
-                fx.setByteBuf(buf.flip());
-                channel.flushFuture(fx);
+                channel.flush(buf.flip());
             }
         });
         context.addChannelEventListener(new ChannelEventListenerAdapter() {
@@ -194,28 +189,28 @@ public final class Endpoint implements Closeable, Comparable<Endpoint> {
     
     private boolean needAddTask = true;
     
-    private final List<Future> futures = new ArrayList<>(200);
+    private final List<ByteBuf> futures = new ArrayList<>(200);
 
-    public void flushChannelFuture(int id, Future future) {
+    public void flushChannelFuture(int id, ByteBuf buf) {
         final NioSocketChannel channel = this.channel;
         remain++;
         rts.put(id, System.currentTimeMillis());
         if (AgentApp.BATCH_FLUSH) {
-            futures.add(future);
+            futures.add(buf);
             if (needAddTask) {
                 needAddTask = false;
                 channel.getEventLoop().dispatchAfterLoop(new NioEventLoopTask() {
                     
                     @Override
                     public void fireEvent(NioEventLoop eventLoop) throws IOException {
-                        channel.flushFutures(futures);
+                        channel.flush(futures);
                         futures.clear();
                         needAddTask = true;
                     }
                 });
             }
         }else{
-            channel.flushFuture(future);
+            channel.flush(buf);
         }
     }
 
@@ -224,12 +219,10 @@ public final class Endpoint implements Closeable, Comparable<Endpoint> {
             return;
         }
         registedChannelId.add(channelId);
-        AgentFuture f = new AgentFuture();
         ByteBuf buf = channel.allocator().allocate(8);
         buf.putInt(-3 << 32);
         buf.putInt(channelId);
-        f.setByteBuf(buf.flip());
-        channel.flushFuture(f);
+        channel.flush(buf.flip());
     }
 
     public void deRegistHttpClient(int channelId) {
@@ -237,12 +230,10 @@ public final class Endpoint implements Closeable, Comparable<Endpoint> {
             return;
         }
         registedChannelId.remove(channelId);
-        AgentFuture f = new AgentFuture();
         ByteBuf buf = channel.allocator().allocate(8);
         buf.putInt(-4 << 32);
         buf.putInt(channelId);
-        f.setByteBuf(buf.flip());
-        channel.flushFuture(f);
+        channel.flush(buf.flip());
     }
 
     public ByteBufAllocator allocator() {

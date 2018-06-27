@@ -49,12 +49,12 @@ public final class AgentCodec implements ProtocolCodec {
 
     @Override
     public Future createPINGPacket(NioSocketChannel channel) {
-        return new AgentFuture().setPING();
+        return new AgentFuture().setPing();
     }
 
     @Override
     public Future createPONGPacket(NioSocketChannel channel, Future ping) {
-        return new AgentFuture().setPONG();
+        return new AgentFuture().setPong();
     }
 
     @Override
@@ -63,12 +63,10 @@ public final class AgentCodec implements ProtocolCodec {
     }
 
     @Override
-    public void encode(NioSocketChannel channel, Future future) throws IOException {
+    public ByteBuf encode(NioSocketChannel channel, Future future) throws IOException {
         ByteBufAllocator allocator = channel.allocator();
-        if (future.isHeartbeat()) {
-            ByteBuf buf = future.isPING() ? PING.duplicate() : PONG.duplicate();
-            future.setByteBuf(buf);
-            return;
+        if (future.isSilent()) {
+            return future.isPing() ? PING.duplicate() : PONG.duplicate();
         }
         AgentFuture f = (AgentFuture) future;
         int writeSize = f.getWriteSize();
@@ -78,7 +76,7 @@ public final class AgentCodec implements ProtocolCodec {
         ByteBuf buf = allocator.allocate(writeSize + 4);
         buf.putInt(writeSize);
         buf.put(f.getWriteBuffer(), 0, writeSize);
-        future.setByteBuf(buf.flip());
+        return buf.flip();
     }
 
     @Override

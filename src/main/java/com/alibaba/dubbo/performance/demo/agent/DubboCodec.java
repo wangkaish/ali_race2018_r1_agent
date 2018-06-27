@@ -68,11 +68,10 @@ public final class DubboCodec implements ProtocolCodec {
     }
 
     @Override
-    public void encode(NioSocketChannel channel, Future future) throws IOException {
+    public ByteBuf encode(NioSocketChannel channel, Future future) throws IOException {
         DubboFuture f = (DubboFuture) future;
         if (f.isEvent()) {
-            encodeEvent(channel, f);
-            return;
+            return encodeEvent(channel, f);
         }
         ByteBuf data = f.getData();
         int id = data.getInt();
@@ -135,10 +134,10 @@ public final class DubboCodec implements ProtocolCodec {
         buf.put(atbs);
         buf.putByte(LF);
         data.release(data.getReleaseVersion());
-        future.setByteBuf(buf.flip());
+        return buf.flip();
     }
 
-    public void encodeEvent(NioSocketChannel channel, DubboFuture f) throws IOException {
+    public ByteBuf encodeEvent(NioSocketChannel channel, DubboFuture f) throws IOException {
         int len = HEADER_LENGTH + 5;
         ByteBuf buf = channel.allocator().allocate(len); //FIXME ..... len
         buf.putShort(MAGIC);
@@ -153,7 +152,7 @@ public final class DubboCodec implements ProtocolCodec {
         buf.putInt(5);
         buf.put(NULL);
         buf.putByte(LF);
-        f.setByteBuf(buf.flip());
+        return buf.flip();
     }
 
     @Override
